@@ -40,7 +40,7 @@ html, body { height:100%; overflow:hidden; font-family:'Roboto',sans-serif; back
 
 /* ===== LAYOUT ===== */
 #app { display:flex; flex-direction:column; height:100dvh; }
-#pages { flex:1; overflow:hidden; position:relative; }
+#pages { flex:1; overflow:hidden; position:relative; min-height:0; }
 .page { position:absolute; inset:0; display:none; flex-direction:column; overflow:hidden; }
 .page.active { display:flex; }
 
@@ -790,13 +790,14 @@ html, body { height:100%; overflow:hidden; font-family:'Roboto',sans-serif; back
 /* ===== COMMENTS PANEL ===== */
 .sheet-panel {
   position:fixed;
-  bottom:var(--nav-h);
+  bottom:0;
   left:0; right:0;
-  height:65vh;
+  height:calc(65vh + var(--nav-h));
+  padding-bottom:var(--nav-h);
   background:var(--surface);
   border-radius:var(--radius-l) var(--radius-l) 0 0;
   z-index:300;
-  transform:translateY(102%);
+  transform:translateY(100%);
   transition:transform 0.35s var(--anim);
   display:flex;
   flex-direction:column;
@@ -868,14 +869,15 @@ html, body { height:100%; overflow:hidden; font-family:'Roboto',sans-serif; back
 /* ===== SHARE SHEET ===== */
 .share-sheet {
   position:fixed;
-  bottom:var(--nav-h);
+  bottom:0;
   left:0; right:0;
   background:var(--surface);
   border-radius:var(--radius-l) var(--radius-l) 0 0;
   z-index:300;
-  transform:translateY(102%);
+  transform:translateY(100%);
   transition:transform 0.35s var(--anim);
   padding:16px;
+  padding-bottom:calc(16px + var(--nav-h));
   box-shadow:0 -4px 40px rgba(0,0,0,0.5);
 }
 .share-sheet.open { transform:translateY(0); }
@@ -926,14 +928,17 @@ html, body { height:100%; overflow:hidden; font-family:'Roboto',sans-serif; back
 @media (min-width:768px) {
   #app { flex-direction:row; }
   .bottom-nav {
+    order:-1;
     width:240px;
-    height:auto;
+    height:100dvh;
     flex-direction:column;
     justify-content:flex-start;
     align-items:stretch;
     padding:24px 0;
     border-top:none;
     border-right:1px solid var(--outline);
+    border-bottom:none;
+    flex-shrink:0;
   }
   .nav-item {
     flex-direction:row;
@@ -957,13 +962,13 @@ html, body { height:100%; overflow:hidden; font-family:'Roboto',sans-serif; back
     padding:16px 20px 24px;
     letter-spacing:-0.5px;
   }
-  #pages { flex:1; height:100dvh; }
+  #pages { flex:1; height:100dvh; min-height:0; }
   .video-slide { height:100dvh; }
   #feed-container { height:100%; }
   .video-actions { bottom:100px; right:16px; }
-  .sheet-panel, .share-sheet { max-width:600px; left:240px; }
+  .sheet-panel { bottom:0; padding-bottom:0; height:65vh; left:240px; }
+  .share-sheet { left:240px; padding-bottom:16px; }
   .panel-backdrop { left:240px; }
-  .bottom-nav-spacer { display:none; }
 }
 @media (min-width:1024px) {
   .bottom-nav { width:280px; }
@@ -973,6 +978,14 @@ html, body { height:100%; overflow:hidden; font-family:'Roboto',sans-serif; back
 
 /* ===== FEED SPECIFIC ===== */
 #homePage { overflow:hidden; }
+
+/* ===== NAV LOGO ===== */
+/* Скрыт на мобиле, виден только в боковой панели на десктопе */
+.nav-logo { display:none; }
+
+@media (min-width:768px) {
+  .nav-logo { display:block; }
+}
 
 /* ===== TG WIDGET ===== */
 .tg-wrap { display:flex; justify-content:center; margin:4px 0; }
@@ -1032,35 +1045,9 @@ html, body { height:100%; overflow:hidden; font-family:'Roboto',sans-serif; back
 <body>
 <div id="app">
 
-  <!-- ===== BOTTOM / SIDE NAV ===== -->
-  <nav class="bottom-nav" id="bottomNav">
-    <div class="nav-logo" id="navLogo" style="display:none">ВрисТок</div>
-    <div class="nav-item active ripple-host" onclick="switchPage('home')" id="nav-home">
-      <div class="nav-indicator"></div>
-      <i class="fas fa-house"></i><span>Главная</span>
-    </div>
-    <div class="nav-item ripple-host" onclick="switchPage('discover')" id="nav-discover">
-      <div class="nav-indicator"></div>
-      <i class="fas fa-compass"></i><span>Поиск</span>
-    </div>
-    <div class="nav-item ripple-host" onclick="switchPage('upload')" id="nav-upload">
-      <div class="nav-indicator"></div>
-      <div class="nav-upload-btn" id="navUploadBtn"><i class="fas fa-plus"></i></div>
-      <span style="margin-left:4px">Создать</span>
-    </div>
-    <div class="nav-item ripple-host" onclick="switchPage('messages')" id="nav-messages" style="position:relative">
-      <div class="nav-indicator"></div>
-      <i class="fas fa-envelope"></i><span>Сообщения</span>
-      <div class="notif-dot" id="msgNotif"></div>
-    </div>
-    <div class="nav-item ripple-host" onclick="switchPage('profile')" id="nav-profile">
-      <div class="nav-indicator"></div>
-      <i class="fas fa-person"></i><span>Профиль</span>
-    </div>
-  </nav>
-
   <!-- ===== PAGES ===== -->
   <div id="pages">
+
 
     <!-- HOME -->
     <div class="page active" id="homePage">
@@ -1136,6 +1123,34 @@ html, body { height:100%; overflow:hidden; font-family:'Roboto',sans-serif; back
     </div>
 
   </div><!-- /pages -->
+
+  <!-- ===== BOTTOM / SIDE NAV ===== -->
+  <nav class="bottom-nav" id="bottomNav">
+    <div class="nav-logo" id="navLogo">ВрисТок</div>
+    <div class="nav-item active ripple-host" onclick="switchPage('home')" id="nav-home">
+      <div class="nav-indicator"></div>
+      <i class="fas fa-house"></i><span>Главная</span>
+    </div>
+    <div class="nav-item ripple-host" onclick="switchPage('discover')" id="nav-discover">
+      <div class="nav-indicator"></div>
+      <i class="fas fa-compass"></i><span>Поиск</span>
+    </div>
+    <div class="nav-item ripple-host" onclick="switchPage('upload')" id="nav-upload">
+      <div class="nav-indicator"></div>
+      <div class="nav-upload-btn" id="navUploadBtn"><i class="fas fa-plus"></i></div>
+      <span style="margin-left:4px">Создать</span>
+    </div>
+    <div class="nav-item ripple-host" onclick="switchPage('messages')" id="nav-messages" style="position:relative">
+      <div class="nav-indicator"></div>
+      <i class="fas fa-envelope"></i><span>Сообщения</span>
+      <div class="notif-dot" id="msgNotif"></div>
+    </div>
+    <div class="nav-item ripple-host" onclick="switchPage('profile')" id="nav-profile">
+      <div class="nav-indicator"></div>
+      <i class="fas fa-person"></i><span>Профиль</span>
+    </div>
+  </nav>
+
 </div><!-- /app -->
 
 <!-- ===== CHAT VIEW ===== -->
@@ -1581,19 +1596,7 @@ function switchPage(page) {
   }
 }
 
-// Desktop sidebar logo
-function initDesktopNav() {
-  if (window.innerWidth >= 768) {
-    document.getElementById('navLogo').style.display = 'block';
-    const uploadBtn = document.getElementById('navUploadBtn');
-    if (uploadBtn) uploadBtn.style.display = 'none';
-  }
-}
-window.addEventListener('resize', () => {
-  const logo = document.getElementById('navLogo');
-  if (logo) logo.style.display = window.innerWidth >= 768 ? 'block' : 'none';
-});
-initDesktopNav();
+// Desktop sidebar logo — handled by CSS media query, no JS needed
 
 // ==================== FEED ====================
 async function loadFeed() {
