@@ -480,6 +480,28 @@ html, body { height:100%; overflow:hidden; font-family:'Roboto',sans-serif; back
 .captcha-check i { font-size:13px; color:#fff; display:none; }
 .captcha-check.checked i { display:block; }
 
+/* ===== LINK ACCOUNT BLOCK ===== */
+.link-provider-card {
+  background:var(--surface2);
+  border-radius:var(--radius-m);
+  padding:16px;
+  margin-bottom:12px;
+}
+.link-provider-row {
+  display:flex;
+  align-items:center;
+  gap:10px;
+  margin-bottom:10px;
+}
+.link-provider-icon {
+  width:36px; height:36px;
+  border-radius:50%;
+  display:flex; align-items:center; justify-content:center;
+  flex-shrink:0;
+}
+.link-status-ok { font-size:12px; color:#4caf50; }
+.link-status-ok i { margin-right:3px; }
+
 /* ===== DISCOVER ===== */
 .page-header {
   padding:16px;
@@ -1491,36 +1513,80 @@ function loadTelegramWidget() {
   c.appendChild(s);
 }
 
-window.onTelegramAuth = async function(user) {
+window.onTelegramAuth = async function(tgUser) {
   try {
-    const fakeEmail = 'tg_' + user.id + '@vristok.app';
-    const fakePwd = 'tg_' + user.id + '_' + (user.hash || 'x');
-    try {
-      await auth.signInWithEmailAndPassword(fakeEmail, fakePwd);
-    } catch(e) {
-      if (e.code === 'auth/user-not-found' || e.code === 'auth/invalid-credential') {
-        const cred = await auth.createUserWithEmailAndPassword(fakeEmail, fakePwd);
-        const uid = cred.user.uid;
-        const uname = user.username || ('tg' + user.id);
-        const userData = {
-          username: uname,
-          email: fakeEmail,
-          displayName: ((user.first_name || '') + ' ' + (user.last_name || '')).trim(),
-          bio: '',
-          avatar: user.photo_url || '',
-          createdAt: Date.now(),
-          telegramId: user.id
-        };
-        await db.ref('users/' + uid).set(userData);
-        await db.ref('usernames/' + uname.toLowerCase()).set({ uid, email: fakeEmail });
-        currentUserData = userData;
-      } else throw e;
+    const tgId = String(tgUser.id);
+    // Стабильный пароль — используем только id, никакого hash (hash меняется каждый раз)
+    const fakeEmail = 'tg_' + tgId + '@vristok.app';
+    const fakePwd = 'VrisTok_tg_' + tgId + '_secure2024';
+
+    // Проверяем, есть ли уже запись в БД по telegramId
+    let uid = null;
+    const tgSnap = await db.ref('telegramIds/' + tgId).once('value');
+    if (tgSnap.exists()) {
+      uid = tgSnap.val().uid;
     }
+
+    if (uid) {
+      // Пользователь уже зарегистрирован — входим
+      try {
+        await auth.signInWithEmailAndPassword(fakeEmail, fakePwd);
+      } catch(signInErr) {
+        // Если пароль почему-то не подходит — пробуем сбросить через ре-регистрацию не выйдет,
+        // но показываем понятную ошибку
+        console.error('TG sign in error:', signInErr);
+        showToast('Ошибка входа через Telegram: ' + signInErr.message);
+        return;
+      }
+    } else {
+      // Новый пользователь — регистрируем
+      let uname = (tgUser.username || ('tg' + tgId)).toLowerCase().replace(/[^a-z0-9_]/g, '_');
+      // Проверяем уникальность юзернейма
+      const unameSnap = await db.ref('usernames/' + uname).once('value');
+      if (unameSnap.exists()) uname = uname + '_' + tgId.slice(-4);
+
+      try {
+        const cred = await auth.createUserWithEmailAndPassword(fakeEmail, fakePwd);
+        uid = cred.user.uid;
+      } catch(createErr) {
+        if (createErr.code === 'auth/email-already-in-use') {
+          // Аккаунт существует но telegramIds не записан — входим
+          await auth.signInWithEmailAndPassword(fakeEmail, fakePwd);
+          const snap = await db.ref('users/' + auth.currentUser.uid).once('value');
+          currentUserData = snap.val() || {};
+          showToast('Вход через Telegram! ✈️');
+          closeAuthModal();
+          return;
+        }
+        throw createErr;
+      }
+
+      const displayName = ((tgUser.first_name || '') + ' ' + (tgUser.last_name || '')).trim() || uname;
+      const userData = {
+        username: uname,
+        email: fakeEmail,
+        displayName,
+        bio: '',
+        avatar: tgUser.photo_url || '',
+        createdAt: Date.now(),
+        telegramId: tgId,
+        authProvider: 'telegram'
+      };
+      await db.ref('users/' + uid).set(userData);
+      await db.ref('usernames/' + uname).set({ uid, email: fakeEmail });
+      await db.ref('telegramIds/' + tgId).set({ uid, createdAt: Date.now() });
+      currentUserData = userData;
+    }
+
+    // После входа обновляем данные пользователя
+    const snap = await db.ref('users/' + auth.currentUser.uid).once('value');
+    currentUserData = snap.val() || {};
+
     showToast('Вход через Telegram! ✈️');
     closeAuthModal();
   } catch(e) {
-    showToast('Ошибка входа через Telegram');
-    console.error(e);
+    console.error('onTelegramAuth error:', e);
+    showToast('Ошибка входа через Telegram: ' + (e.message || e.code || 'неизвестная ошибка'));
   }
 };
 
@@ -2206,12 +2272,16 @@ async function toggleFollow(uid, el) {
 function openEditProfile() {
   const modal = document.getElementById('authModal');
   const inner = document.getElementById('authModalInner');
+  const isTgUser = currentUserData?.authProvider === 'telegram' || !!currentUserData?.telegramId;
+  const hasEmail = currentUserData?.linkedEmail || (!isTgUser && currentUserData?.email && !currentUserData.email.startsWith('tg_'));
+
   inner.innerHTML = `
     <div class="modal-handle"></div>
     <div class="modal-close" onclick="closeAuthModal();loadProfile(currentUser.uid)"><i class="fas fa-xmark"></i></div>
     <h2 style="margin-bottom:20px">Редактировать профиль</h2>
+
     <div class="form-group">
-      <label class="form-label">Аватар (URL)</label>
+      <label class="form-label">Аватар (URL картинки)</label>
       <input class="form-input" id="editAvatar" value="${escHtml(currentUserData?.avatar || '')}" placeholder="https://...">
     </div>
     <div class="form-group">
@@ -2222,16 +2292,100 @@ function openEditProfile() {
       <label class="form-label">О себе</label>
       <textarea class="form-input" id="editBio" rows="3" style="resize:none">${escHtml(currentUserData?.bio || '')}</textarea>
     </div>
-    <button class="form-btn" onclick="saveProfile()"><i class="fas fa-floppy-disk" style="margin-right:8px"></i>Сохранить</button>
-    <button class="form-btn secondary" style="margin-top:8px" onclick="closeAuthModal();loadProfile(currentUser.uid)">Отмена</button>
+    <button class="form-btn" onclick="saveProfile()"><i class="fas fa-floppy-disk" style="margin-right:8px"></i>Сохранить изменения</button>
+
+    <div class="divider">Привязка аккаунтов</div>
+
+    ${isTgUser ? `
+      <!-- Зарегистрирован через Telegram → предлагаем привязать email+пароль -->
+      <div style="background:var(--surface2);border-radius:var(--radius-m);padding:16px;margin-bottom:12px">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+          <div style="width:36px;height:36px;border-radius:50%;background:#0088cc;display:flex;align-items:center;justify-content:center">
+            <i class="fab fa-telegram" style="color:#fff;font-size:18px"></i>
+          </div>
+          <div>
+            <div style="font-weight:600;font-size:14px">Telegram</div>
+            <div style="font-size:12px;color:#4caf50"><i class="fas fa-circle-check"></i> Подключён</div>
+          </div>
+        </div>
+        ${hasEmail ? `
+          <div style="display:flex;align-items:center;gap:10px">
+            <div style="width:36px;height:36px;border-radius:50%;background:var(--primary);display:flex;align-items:center;justify-content:center">
+              <i class="fas fa-envelope" style="color:#fff;font-size:16px"></i>
+            </div>
+            <div>
+              <div style="font-weight:600;font-size:14px">Email</div>
+              <div style="font-size:12px;color:#4caf50"><i class="fas fa-circle-check"></i> ${escHtml(currentUserData.linkedEmail)}</div>
+            </div>
+          </div>
+        ` : `
+          <div style="font-size:13px;color:var(--on-surface-dim);margin-bottom:10px">
+            <i class="fas fa-link" style="margin-right:6px"></i>Привяжите email и пароль, чтобы входить без Telegram
+          </div>
+          <div class="form-group" style="margin-bottom:10px">
+            <input class="form-input" id="linkEmail" type="email" placeholder="Ваш Email">
+          </div>
+          <div class="form-group" style="margin-bottom:10px">
+            <input class="form-input" id="linkPwd" type="password" placeholder="Придумайте пароль (мин. 8 симв.)">
+          </div>
+          <div class="form-group" style="margin-bottom:10px">
+            <input class="form-input" id="linkPwd2" type="password" placeholder="Повторите пароль">
+          </div>
+          <div class="error-msg" id="linkError" style="margin-bottom:8px"><i class="fas fa-circle-exclamation"></i><span></span></div>
+          <button class="form-btn" style="padding:11px" onclick="linkEmailToTg()">
+            <i class="fas fa-link" style="margin-right:8px"></i>Привязать Email
+          </button>
+        `}
+      </div>
+    ` : `
+      <!-- Зарегистрирован через Email → предлагаем привязать Telegram -->
+      <div style="background:var(--surface2);border-radius:var(--radius-m);padding:16px;margin-bottom:12px">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+          <div style="width:36px;height:36px;border-radius:50%;background:var(--primary);display:flex;align-items:center;justify-content:center">
+            <i class="fas fa-envelope" style="color:#fff;font-size:16px"></i>
+          </div>
+          <div>
+            <div style="font-weight:600;font-size:14px">Email</div>
+            <div style="font-size:12px;color:#4caf50"><i class="fas fa-circle-check"></i> ${escHtml(currentUserData?.email || '')}</div>
+          </div>
+        </div>
+        ${currentUserData?.telegramId ? `
+          <div style="display:flex;align-items:center;gap:10px">
+            <div style="width:36px;height:36px;border-radius:50%;background:#0088cc;display:flex;align-items:center;justify-content:center">
+              <i class="fab fa-telegram" style="color:#fff;font-size:18px"></i>
+            </div>
+            <div>
+              <div style="font-weight:600;font-size:14px">Telegram</div>
+              <div style="font-size:12px;color:#4caf50"><i class="fas fa-circle-check"></i> Подключён (ID: ${escHtml(currentUserData.telegramId)})</div>
+            </div>
+          </div>
+        ` : `
+          <div style="font-size:13px;color:var(--on-surface-dim);margin-bottom:12px">
+            <i class="fas fa-link" style="margin-right:6px"></i>Привяжите Telegram для быстрого входа
+          </div>
+          <div style="display:flex;justify-content:center" id="linkTgWidget"></div>
+          <p style="font-size:11px;color:var(--on-surface-dim);text-align:center;margin-top:8px">
+            После входа через Telegram он будет привязан к вашему аккаунту
+          </p>
+        `}
+      </div>
+    `}
+
+    <button class="form-btn secondary" style="margin-top:4px" onclick="closeAuthModal();loadProfile(currentUser.uid)">Закрыть</button>
   `;
   modal.classList.add('active');
+
+  // Загружаем Telegram виджет для привязки (если email-юзер без TG)
+  if (!isTgUser && !currentUserData?.telegramId) {
+    setTimeout(() => loadTelegramLinkWidget(), 300);
+  }
 }
 
 async function saveProfile() {
-  const avatar = document.getElementById('editAvatar').value.trim();
-  const displayName = document.getElementById('editDisplayName').value.trim();
-  const bio = document.getElementById('editBio').value.trim();
+  const avatar = document.getElementById('editAvatar')?.value.trim() || '';
+  const displayName = document.getElementById('editDisplayName')?.value.trim() || '';
+  const bio = document.getElementById('editBio')?.value.trim() || '';
+  if (!displayName) return showToast('Введите отображаемое имя');
   await db.ref('users/' + currentUser.uid).update({ avatar, displayName, bio });
   if (currentUserData) { currentUserData.avatar = avatar; currentUserData.displayName = displayName; currentUserData.bio = bio; }
   showToast('Профиль обновлён! ✨');
@@ -2239,6 +2393,102 @@ async function saveProfile() {
   restoreAuthModal();
   loadProfile(currentUser.uid);
 }
+
+// ==================== Link Email to Telegram account ====================
+async function linkEmailToTg() {
+  const emailEl = document.getElementById('linkEmail');
+  const pwdEl = document.getElementById('linkPwd');
+  const pwd2El = document.getElementById('linkPwd2');
+  const errEl = document.getElementById('linkError');
+  if (!emailEl || !pwdEl || !pwd2El) return;
+
+  const email = emailEl.value.trim();
+  const pwd = pwdEl.value;
+  const pwd2 = pwd2El.value;
+
+  errEl.classList.remove('show');
+
+  if (!email || !pwd || !pwd2) {
+    errEl.querySelector('span').textContent = 'Заполните все поля';
+    errEl.classList.add('show'); return;
+  }
+  if (pwd.length < 8) {
+    errEl.querySelector('span').textContent = 'Пароль минимум 8 символов';
+    errEl.classList.add('show'); return;
+  }
+  if (!/[a-zA-Zа-яА-Я]/.test(pwd) || !/[0-9]/.test(pwd)) {
+    errEl.querySelector('span').textContent = 'Пароль должен содержать буквы и цифры';
+    errEl.classList.add('show'); return;
+  }
+  if (pwd !== pwd2) {
+    errEl.querySelector('span').textContent = 'Пароли не совпадают';
+    errEl.classList.add('show'); return;
+  }
+
+  try {
+    // Создаём credential для email+password и привязываем к текущему аккаунту Firebase
+    const credential = firebase.auth.EmailAuthProvider.credential(email, pwd);
+    await currentUser.linkWithCredential(credential);
+
+    // Сохраняем в БД
+    await db.ref('users/' + currentUser.uid).update({ linkedEmail: email });
+    if (currentUserData) currentUserData.linkedEmail = email;
+
+    showToast('Email успешно привязан! 🎉');
+    closeAuthModal();
+    restoreAuthModal();
+    loadProfile(currentUser.uid);
+  } catch(e) {
+    const msgs = {
+      'auth/email-already-in-use': 'Этот email уже используется другим аккаунтом',
+      'auth/invalid-email': 'Неверный формат email',
+      'auth/provider-already-linked': 'Email уже привязан'
+    };
+    errEl.querySelector('span').textContent = msgs[e.code] || e.message;
+    errEl.classList.add('show');
+  }
+}
+
+// ==================== Link Telegram widget for email users ====================
+function loadTelegramLinkWidget() {
+  const c = document.getElementById('linkTgWidget');
+  if (!c) return;
+  c.innerHTML = '';
+  const s = document.createElement('script');
+  s.async = true;
+  s.src = 'https://telegram.org/js/telegram-widget.js?23';
+  s.setAttribute('data-telegram-login', 'VrisTok_login_bot');
+  s.setAttribute('data-size', 'medium');
+  s.setAttribute('data-onauth', 'onTelegramLink(user)');
+  s.setAttribute('data-request-access', 'write');
+  c.appendChild(s);
+}
+
+window.onTelegramLink = async function(tgUser) {
+  if (!currentUser) return;
+  try {
+    const tgId = String(tgUser.id);
+    // Проверяем, не привязан ли этот TG к другому аккаунту
+    const tgSnap = await db.ref('telegramIds/' + tgId).once('value');
+    if (tgSnap.exists() && tgSnap.val().uid !== currentUser.uid) {
+      showToast('Этот Telegram уже привязан к другому аккаунту ВрисТок');
+      return;
+    }
+    await db.ref('users/' + currentUser.uid).update({
+      telegramId: tgId,
+      avatar: currentUserData?.avatar || tgUser.photo_url || ''
+    });
+    await db.ref('telegramIds/' + tgId).set({ uid: currentUser.uid });
+    if (currentUserData) { currentUserData.telegramId = tgId; }
+    showToast('Telegram успешно привязан! ✈️');
+    closeAuthModal();
+    restoreAuthModal();
+    loadProfile(currentUser.uid);
+  } catch(e) {
+    showToast('Ошибка привязки: ' + (e.message || e.code));
+    console.error(e);
+  }
+};
 
 async function doLogout() {
   await auth.signOut();
